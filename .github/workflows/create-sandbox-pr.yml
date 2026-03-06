@@ -1,0 +1,97 @@
+name: Create Sandbox PR
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  create-sandbox-pr:
+    if: github.event.label.name == 'sandbox'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate PR and create sandbox PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request
+            const owner = context.repo.owner
+            const repo = context.repo.repo
+
+            if (pr.merged) {
+              core.setFailed("PR already merged")
+              return
+            }
+
+            const headBranch = pr.head.ref
+            const baseBranch = "sandbox"
+
+            console.log(`Source branch: ${headBranch}`)
+
+            // ------------------------------
+            // Check approvals
+            // ------------------------------
+            const reviews = await github.rest.pulls.listReviews({
+              owner,
+              repo,
+              pull_number: pr.number
+            })
+
+            const approvals = reviews.data.filter(r => r.state === "APPROVED")
+
+            if (approvals.length === 0) {
+              core.setFailed("PR does not have approvals")
+              return
+            }
+
+            console.log(`Approvals found: ${approvals.length}`)
+
+            // ------------------------------
+            // Check status checks
+            // ------------------------------
+            const combinedStatus = await github.rest.repos.getCombinedStatusForRef({
+              owner,
+              repo,
+              ref: pr.head.sha
+            })
+
+            if (combinedStatus.data.state !== "success") {
+              core.setFailed("Status checks have not passed")
+              return
+            }
+
+            console.log("All checks passed")
+
+            // ------------------------------
+            // Check if sandbox PR already exists
+            // ------------------------------
+            const existingPRs = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: "open",
+              head: `${owner}:${headBranch}`,
+              base: baseBranch
+            })
+
+            if (existingPRs.data.length > 0) {
+              console.log("Sandbox PR already exists")
+              return
+            }
+
+            // ------------------------------
+            // Create sandbox PR
+            // ------------------------------
+            const newPR = await github.rest.pulls.create({
+              owner,
+              repo,
+              title: `[SANDBOX] ${pr.title}`,
+              head: headBranch,
+              base: baseBranch,
+              body: `Automatically created from PR #${pr.number}`
+            })
+
+            console.log(`Sandbox PR created: ${newPR.data.html_url}`)
